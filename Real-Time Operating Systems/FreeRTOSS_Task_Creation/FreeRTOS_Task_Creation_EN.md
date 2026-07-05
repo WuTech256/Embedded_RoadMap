@@ -1,231 +1,233 @@
-# Tạo Task Trong FreeRTOS - Hướng Dẫn Chi Tiết (Có Code Minh Họa)
+# FreeRTOS Task Creation - Detailed Guide
 
-## 1. Task (Tác vụ) là gì?
-Trong các hệ thống nhúng thông thường (không có hệ điều hành), code của bạn thường chạy trong một vòng lặp `while(1)` khổng lồ duy nhất (gọi là Super Loop). Với FreeRTOS, chương trình của bạn được chia nhỏ thành nhiều luồng độc lập, mỗi luồng gọi là một **Task**.
-Mỗi Task đóng vai trò như một chương trình nhỏ độc lập, và nó có cảm giác như đang chiếm toàn quyền điều khiển CPU.
+## 1. What is a Task?
+In a bare-metal embedded system (without an OS), your code typically runs in a single large infinite loop (the "Super Loop"). In FreeRTOS, the application is divided into independent chunks of code called **Tasks**.
+A Task is simply a C function that can be scheduled to run on the CPU. Each task behaves as if it has the entire CPU to itself.
 
-### Cấu trúc cơ bản của một Task
-Một hàm xử lý task (Task Handler) trong FreeRTOS luôn phải tuân theo định dạng: trả về kiểu `void` và nhận một tham số là con trỏ `void *`.
+### The Anatomy of a Task
+A task function in FreeRTOS must have a specific signature: it returns `void` and takes a single `void *` parameter.
 
 ```c
 void vTaskFunction( void *pvParameters )
 {
-    /* Code khởi tạo - Chỉ chạy 1 lần khi task mới bắt đầu */
+    /* Task initialization code goes here */
 
-    for( ;; ) /* Vòng lặp vô hạn của Task */
+    for( ;; ) /* Infinite loop */
     {
-        /* Code thực thi chính của Task nằm ở đây */
+        /* Task application code goes here */
     }
 }
 ```
 
-## 2. Quá trình Khởi Tạo và Triển Khai Task
-Quá trình này gồm 2 bước: Đăng ký tạo task với RTOS, và viết hàm code để task chạy.
+## 2. Creating and Implementing a Task
+Creating a task involves two steps: calling the FreeRTOS API to register the task, and writing the C function that implements it.
 
-### A. Khởi tạo Task với `xTaskCreate()`
-Để tạo một task, ta dùng hàm API `xTaskCreate()`.
+### A. Creating the Task: `xTaskCreate()`
+To create a task, you use the `xTaskCreate()` API function.
 
 ```c
 #include "FreeRTOS.h"
 #include "task.h"
 
-// Biến lưu trữ Handle của Task để quản lý sau này
+// Task handles
 TaskHandle_t xTask1Handle = NULL;
 
 int main(void)
 {
-    // Tạo Task số 1
+    // Create Task 1
     xTaskCreate(
-        vTask1_handler,       /* Con trỏ trỏ đến hàm của task */
-        "Task-1",             /* Tên của task (dạng chuỗi, dùng để debug) */
-        configMINIMAL_STACK_SIZE, /* Kích thước bộ nhớ Stack (tính bằng Word, KHÔNG phải byte) */
-        NULL,                 /* Tham số muốn truyền vào cho task */
-        2,                    /* Mức độ ưu tiên (Priority) */
-        &xTask1Handle         /* Biến con trỏ để nhận lại Task Handle */
+        vTask1_handler,       /* Pointer to the function that implements the task */
+        "Task-1",             /* Text name for the task (useful for debugging) */
+        configMINIMAL_STACK_SIZE, /* Stack size in words (not bytes!) */
+        NULL,                 /* Parameter passed into the task */
+        2,                    /* Priority at which the task is created */
+        &xTask1Handle         /* Pointer to store the task handle */
     );
 
-    // Khởi động Bộ lập lịch (Scheduler) để các task bắt đầu chạy
+    // Start the scheduler so the tasks start executing
     vTaskStartScheduler();
 
-    // Code sẽ KHÔNG BAO GIỜ chạy đến đây, trừ khi hệ thống không đủ RAM để khởi động RTOS
-    while(1);
+    // The code should never reach here unless there is insufficient RAM
+    for(;;);
 }
 ```
 
-### B. Triển khai code cho Task (Implementation)
-**3 Quy tắc Vàng:**
-1. **Vòng lặp vô hạn**: Hàm của task thường chạy mãi mãi dưới dạng vòng lặp vô hạn, thực hiện việc kiểm tra hoặc phản hồi sự kiện liên tục.
-2. **Không bao giờ Return**: Task tuyệt đối không được phép thực thi lệnh `return` hoặc chạy đến dấu `}` cuối cùng của hàm.
-3. **Phải tự xóa mình**: Nếu task chỉ cần chạy một lần rồi thôi, nó bắt buộc phải tự xóa bản thân khỏi bộ nhớ bằng hàm `vTaskDelete(NULL)`.
+### B. Implementing the Task Handler
+**Key Rules:**
+1. **Infinite Loop**: A task usually runs forever, performing its duty periodically or reacting to events.
+2. **Never Return**: A task function must never execute a `return` statement or reach the end of its closing bracket `}`.
+3. **Deleting**: If a task is only meant to run once, it must delete itself using `vTaskDelete(NULL)`.
 
 ```c
 void vTask1_handler(void *pvParameters)
 {
-    // Biến cục bộ, được cấp phát trên Stack của Task
+    // Initialization (runs once when the task starts)
     int counter = 0;
 
-    // Vòng lặp chính của task
+    // The Task Loop
     while(1)
     {
+        // Do something
         counter++;
         
-        // Đưa task vào trạng thái Block (chờ) trong 1000 ticks (giúp nhường CPU cho task khác)
+        // Wait for 1000 ticks (Blocking state)
         vTaskDelay(pdMS_TO_TICKS(1000)); 
     }
     
-    // Nếu vì lý do nào đó thoát khỏi vòng lặp while, BẮT BUỘC phải xóa task
+    // A task MUST NOT return. If we break out of the loop, we must delete it.
     vTaskDelete(NULL); 
 }
 ```
 
-## 3. Mức độ ưu tiên của Task (Task Priorities)
-Khi có nhiều task cùng muốn chạy, **Scheduler** sẽ dựa vào **Priority** để quyết định ai được chạy.
-- **Số càng nhỏ = Ưu tiên càng thấp**: Mức `0` là thấp nhất (thường dành cho Idle Task - task chạy lúc rảnh rỗi).
-- **Số càng lớn = Ưu tiên càng cao**: Mức ưu tiên tối đa được giới hạn bởi `configMAX_PRIORITIES - 1`.
+## 3. Task Priorities
+When multiple tasks are ready to run, the CPU can only execute one at a time. The **Scheduler** decides which one runs based on **Priority**.
+- **Lower Priority Number = Lower Urgency**: Priority 0 is the lowest (typically given to the Idle task).
+- **Higher Priority Number = Higher Urgency**: The maximum priority is `(configMAX_PRIORITIES - 1)`.
 
-**Ảnh hưởng đến bộ nhớ**: Bạn cấu hình biến này trong file `FreeRTOSConfig.h`.
+**Memory Impact**: You configure `configMAX_PRIORITIES` in `FreeRTOSConfig.h`.
 ```c
-#define configMAX_PRIORITIES  ( 5 ) // Hệ thống có 5 mức ưu tiên: 0, 1, 2, 3, 4
+#define configMAX_PRIORITIES  ( 5 ) // Priorities 0, 1, 2, 3, 4 are available
 ```
-*Lưu ý: Mọi mức ưu tiên được thêm vào sẽ khiến FreeRTOS phải tạo thêm một "Ready List" riêng biệt, gây tốn RAM. Ngoài ra, quá nhiều mức ưu tiên khiến hệ thống mất thời gian chuyển đổi ngữ cảnh liên tục (context switching), làm giảm hiệu suất.*
+*Note: Using too many priority levels wastes RAM, as FreeRTOS maintains a separate "Ready List" for each priority level. It can also degrade performance due to excessive context switching if not designed carefully.*
 
-## 4. Chuyện gì xảy ra trong bộ nhớ RAM? (TCB và Stack)
-Khi bạn gọi hàm `xTaskCreate()`, RAM của Vi điều khiển (ví dụ 128KB SRAM) sẽ được sử dụng ra sao?
+## 4. Under the Hood: Task Creation and RAM
+What happens inside the microcontroller's RAM (e.g., 128KB SRAM) when you create a task dynamically via `xTaskCreate()`?
 
 ```mermaid
 graph TD
-    subgraph RAM [Tổng quan RAM]
-        Global["Biến toàn cục (.bss / .data)"]
-        Heap_Area["Vùng nhớ Heap"]
-        MainStack["Stack chính"]
+    subgraph RAM [RAM Layout]
+        Global["Global Data (.bss / .data)"]
+        Heap_Area["Heap Memory"]
+        MainStack["Main Stack"]
     end
 
-    subgraph Heap_Area [Bên trong vùng Heap]
-        TCB["Khối điều khiển tác vụ (TCB)"]
-        TaskStack["Task Stack (Ngăn xếp của Task)"]
+    subgraph Heap_Area [Inside the Heap]
+        TCB["Task Control Block (TCB)"]
+        TaskStack["Task Stack"]
     end
 
-    xTaskCreate -- "Cấp phát" --> TCB
-    xTaskCreate -- "Cấp phát" --> TaskStack
+    xTaskCreate -- "Allocates" --> TCB
+    xTaskCreate -- "Allocates" --> TaskStack
     TCB -- "pxTopOfStack" --> TaskStack
 ```
 
-FreeRTOS trích xuất bộ nhớ từ một vùng quản lý động gọi là **Heap** (kích thước do `configTOTAL_HEAP_SIZE` quyết định). Sẽ có 2 thành phần được tạo ra động:
-1. **Khối điều khiển tác vụ (TCB - Task Control Block)**: Một cấu trúc struct C (định nghĩa trong `tasks.c`) chứa toàn bộ thông tin quản lý task (trạng thái, tên, độ ưu tiên).
-2. **Task Stack (Ngăn xếp của Task)**: Một khoảng bộ nhớ để task lưu trữ biến cục bộ, các hàm gọi lồng nhau và trạng thái thanh ghi CPU khi task bị ngắt nhường chỗ cho task khác.
+FreeRTOS pulls memory from a dedicated pool called the **Heap** (`configTOTAL_HEAP_SIZE`).
+When `xTaskCreate()` is called, two critical structures are allocated in the Heap:
+1. **The TCB (Task Control Block)**: A C structure (defined in `tasks.c`) that holds the task's state, priority, name, and stack pointers.
+2. **The Task Stack**: A block of memory used to store local variables, function calls, and CPU registers when the task is swapped out.
 
-**Sự liên kết**: Thành phần đầu tiên trong cấu trúc TCB là biến con trỏ `pxTopOfStack`, trỏ thẳng tới đỉnh của vùng Task Stack vừa được tạo. Vi xử lý ARM Cortex-M dùng thanh ghi PSP (Process Stack Pointer) để theo dõi cái này.
+**How they connect**: The first member of the TCB structure is `pxTopOfStack`, which points to the top of this newly allocated Task Stack. The ARM Cortex-M Processor uses the PSP (Process Stack Pointer) to keep track of this.
 
-## 5. Lập lịch (Scheduling)
-**Scheduler** là bộ não của FreeRTOS, chạy ở chế độ đặc quyền của CPU, nó quét danh sách "Ready List" và quyết định task nào được chiếm CPU.
+## 5. Scheduling
+The **Scheduler** is the core of FreeRTOS. It is a piece of code that runs in privileged mode, deciding which task in the "Ready List" gets CPU time.
 
 ```mermaid
 stateDiagram-v2
     [*] --> READY : xTaskCreate()
-    READY --> RUNNING : Scheduler cấp phát CPU
-    RUNNING --> READY : Bị chiếm quyền / taskYIELD()
-    RUNNING --> BLOCKED : vTaskDelay() / Chờ tài nguyên
-    BLOCKED --> READY : Hết thời gian chờ / Có tài nguyên
+    READY --> RUNNING : Scheduler allocates CPU
+    RUNNING --> READY : Pre-empted / taskYIELD()
+    RUNNING --> BLOCKED : vTaskDelay() / Wait for resource
+    BLOCKED --> READY : Timeout / Resource Available
     RUNNING --> [*] : vTaskDelete()
 ```
 
-- Các task mới tạo mặc định sẽ nằm ở trạng thái **READY** (Sẵn sàng).
-- Bạn phải gọi hàm `vTaskStartScheduler()` trong hàm `main()` để chuyển quyền điều khiển từ `main` sang RTOS.
+- Tasks are created in the **READY** state.
+- You must call `vTaskStartScheduler()` to transfer control from `main()` to the RTOS.
 
-### Các chính sách Lập Lịch
-Được cấu hình thông qua `configUSE_PREEMPTION`.
+### Scheduling Policies
+Controlled by `configUSE_PREEMPTION` in `FreeRTOSConfig.h`.
 
-#### A. Lập lịch Chiếm Quyền - Pre-emptive (`configUSE_PREEMPTION = 1`)
-**Chiếm quyền (Pre-emption)** nghĩa là hệ điều hành ép một task đang chạy phải nhường CPU cho task khác một cách cưỡng chế.
+#### A. Pre-emptive Scheduling (`configUSE_PREEMPTION = 1`)
+**Pre-emption** means replacing a running task with another task involuntarily.
 
-- **Theo mức ưu tiên (Priority-based)**: Một task ưu tiên CAO vừa sẵn sàng sẽ lập tức hất văng task ưu tiên THẤP ra khỏi CPU để chiếm quyền chạy. Task thấp bị đẩy về trạng thái READY.
+- **Priority-based Pre-emption**: A higher-priority task will immediately preempt a lower-priority task the moment the higher-priority task becomes READY. The lower-priority task is forced back to the READY state.
 
 ```mermaid
 gantt
-    title Mô phỏng Lập lịch Chiếm quyền (Priority-based)
+    title Priority-based Pre-emption Simulation
     dateFormat  s
     axisFormat  %S
     
-    section Task 2 (Ưu tiên THẤP)
-    Đang chạy         :active, t2_1, 0, 2s
-    Bị chiếm quyền (Ready):crit, t2_2, 2, 3s
-    Đang chạy         :active, t2_3, 5, 2s
+    section Task 2 (Low Prio)
+    Running           :active, t2_1, 0, 2s
+    Pre-empted (Ready):crit, t2_2, 2, 3s
+    Running           :active, t2_3, 5, 2s
 
-    section Task 1 (Ưu tiên CAO)
-    Đang chờ (Blocked) :done, t1_1, 0, 2s
-    Đang chạy (Chiếm) :active, t1_2, 2, 3s
-    Đang chờ (Blocked) :done, t1_3, 5, 2s
+    section Task 1 (High Prio)
+    Blocked (Delay)   :done, t1_1, 0, 2s
+    Running (Preempts):active, t1_2, 2, 3s
+    Blocked (Delay)   :done, t1_3, 5, 2s
 ```
 
-- **Round-Robin (Vòng tròn định mức thời gian)**: Nếu có 2 task **cùng một mức ưu tiên cao nhất**, CPU sẽ tự động chia đều thời gian (time slices) dựa vào Tick Interrupt để hai task thay phiên nhau chạy.
+- **Round-Robin (Time Slicing)**: If two tasks share the *same* priority, the CPU time is divided into equal "Time Slices" (Tick interrupts). They take turns executing cyclically.
 
 ```mermaid
 gantt
-    title Mô phỏng Lập lịch Round-Robin (Cùng mức ưu tiên)
+    title Round-Robin Scheduling Simulation (Equal Priority)
     dateFormat  s
     axisFormat  %S
 
     section Task A
-    Đang chạy :active, ta1, 0, 1s
-    Sẵn sàng  :done, ta2, 1, 1s
-    Đang chạy :active, ta3, 2, 1s
-    Sẵn sàng  :done, ta4, 3, 1s
+    Running :active, ta1, 0, 1s
+    Ready   :done, ta2, 1, 1s
+    Running :active, ta3, 2, 1s
+    Ready   :done, ta4, 3, 1s
 
     section Task B
-    Sẵn sàng  :done, tb1, 0, 1s
-    Đang chạy :active, tb2, 1, 1s
-    Sẵn sàng  :done, tb3, 2, 1s
-    Đang chạy :active, tb4, 3, 1s
+    Ready   :done, tb1, 0, 1s
+    Running :active, tb2, 1, 1s
+    Ready   :done, tb3, 2, 1s
+    Running :active, tb4, 3, 1s
 ```
 
-#### B. Lập lịch Hợp Tác - Co-operative (`configUSE_PREEMPTION = 0`)
-Hệ điều hành **không bao giờ** cưỡng chế ngắt một task đang chạy. Task đang chiếm CPU sẽ chạy mãi mãi cho đến khi nó tự nguyện (explicitly) nhường CPU.
-- Task tự nguyện nhường CPU bằng cách: gọi hàm chặn như `vTaskDelay()`, chờ cờ Semaphore/Queue, hoặc gọi `taskYIELD()`.
-- Dù Tick Interrupt (ngắt thời thực) của hệ thống vẫn hoạt động, nó sẽ không kích hoạt quá trình chuyển đổi task (Context Switch).
+#### B. Co-operative Scheduling (`configUSE_PREEMPTION = 0`)
+The scheduler will **never** interrupt a running task to swap it out. The running task has total control of the CPU until it explicitly yields.
+- A task yields by calling blocking functions like `vTaskDelay()`, `xQueueReceive()`, or explicitly giving up the CPU via `taskYIELD()`.
+- The RTOS tick interrupt still fires to track time, but it won't force a context switch.
 
-## 6. Debug: In thông báo qua chân SWO (ITM)
-Trong hệ điều hành RTOS, việc dùng hàm `printf` tiêu chuẩn qua UART là "thảm họa" vì nó rất chậm và chặn luôn cả CPU (block).
-Giải pháp thay thế trên chip ARM Cortex là sử dụng phần cứng **ITM (Instrumentation Trace Macrocell)** qua chân **SWO**. Nó cung cấp khả năng in `printf` với tốc độ cực cao, hoạt động song song không làm nghẽn CPU, rất tuyệt vời để theo dõi trạng thái hệ điều hành.
+## 6. Printf over SWO Pin (ITM)
+Using standard UART for `printf` inside an RTOS can cause massive delays and bugs because standard `printf` is slow and blocks the CPU.
+Instead, ARM Cortex processors feature the **ITM (Instrumentation Trace Macrocell)**. You can route `printf` through the SWO (Serial Wire Output) pin. It is highly optimized, application-driven, and supports tracing operating system events with minimal overhead.
 
-## 7. Giải thích chi tiết các câu hỏi kỹ thuật (Q&A)
+## 7. Deep Dive Q&A
 
-**Câu 1: Nếu bạn tạo động một task trong FreeRTOS với vùng nhớ stack là 512 bytes, thì tổng số byte trong vùng Heap bị tiêu thụ là bao nhiêu?**
-**Đáp án**: `512 bytes + sizeof(TCB)`.
-Khi dùng `xTaskCreate`, cả bộ nhớ Stack của task VÀ khối điều khiển TCB đều được lấy ra từ vùng Heap.
+**Q1: If you dynamically create a FreeRTOS Task with 512 bytes of stack, how many bytes in the heap region will be consumed?**
+**Answer**: `512 bytes + sizeof(TCB)`.
+When using `xTaskCreate`, FreeRTOS allocates the Task Stack *and* the Task Control Block (TCB) dynamically from the Heap.
 
-**Câu 2: Thành phần đầu tiên bên trong cấu trúc TCB là gì?**
-**Đáp án**: Một con trỏ lưu trữ địa chỉ đỉnh Stack của Task (`pxTopOfStack`). Điều này rất quan trọng để khi CPU chuyển ngữ cảnh (context switch), mã ASM cấp thấp có thể lấy ngay địa chỉ stack để khôi phục thanh ghi.
+**Q2: What is the first member element of the TCB Structure?**
+**Answer**: A pointer holding the top of the Task's Stack (`pxTopOfStack`). This is critical because when a context switch occurs, the assembly code needs to quickly find where the stack pointer was saved.
 
-**Câu 3: Có đúng là các task sẽ không chạy cho đến khi bạn gọi hàm `vTaskStartScheduler()` không?**
-**Đáp án**: Đúng. Dù bạn có tạo 10 task, chúng chỉ nằm chờ trong danh sách Ready. `vTaskStartScheduler()` sẽ khởi động ngắt SysTick và kích hoạt quá trình đưa task đầu tiên vào CPU chạy.
+**Q3: Tasks won't run until you start the scheduler in FreeRTOS. True or False?**
+**Answer**: True. Even if you create 10 tasks, they just sit in the Ready list. `vTaskStartScheduler()` configures the system timers (SysTick) and triggers the first context switch.
 
-**Câu 4: Giả sử có 2 task (1 cao, 1 thấp) trong chế độ lập lịch Pre-emptive. Làm cách nào để task ưu tiên THẤP có cơ hội chạy?**
-**Đáp án**: Task ưu tiên CAO bắt buộc phải rơi vào trạng thái Blocked (chờ sự kiện, gọi `vTaskDelay`) hoặc Suspended (bị tạm dừng), hoặc tự động gọi `taskYIELD()`. Nếu task CAO cứ chạy liên tục không bao giờ block, task THẤP sẽ bị **Starvation** (chết đói CPU - không bao giờ được chạy).
+**Q4: In priority-based preemptive scheduling, how does a lower-priority task get CPU time from a higher-priority task?**
+**Answer**: The higher-priority task must enter the Blocked or Suspended state (e.g., using `vTaskDelay`, waiting for a Semaphore, or `vTaskSuspend`). If the high-priority task never blocks, the lower-priority task will **starve** (never run).
 
-**Câu 5 & Câu 6: Cấp phát tĩnh (Static Allocation)**
-FreeRTOS hỗ trợ tạo task tĩnh qua `xTaskCreateStatic`. Ở chế độ này, bạn không dùng Heap. Toàn bộ TCB và Stack do bạn tự tạo thành mảng toàn cục, chúng nằm ở vùng RAM toàn cục (Global Area / `.bss` hoặc `.data`).
+**Q5 & Q6: Static Task Allocation (`xTaskCreateStatic`)**
+FreeRTOS supports static allocation. If you use it, both the TCB and the Stack are NOT in the Heap. They are allocated in the Global RAM space (`.bss` or `.data` sections) by the programmer.
 ```c
-// Lập trình viên tự cấp phát mảng làm Stack và TCB
+// Statically allocated stack and TCB
 StackType_t xTaskStack[100];
 StaticTask_t xTaskBuffer;
 
 xTaskCreateStatic(vTaskFunction, "Task", 100, NULL, 1, xTaskStack, &xTaskBuffer);
 ```
 
-**Câu 7: Giả sử có một biến `static` được khai báo bên trong hàm task, bộ nhớ cho biến đó nằm ở đâu?**
-**Đáp án**: Ở vùng biến toàn cục của RAM (`.data` section), KHÔNG phải trên Stack của task.
+**Q7: Where is memory allocated for a static variable declared inside a task function?**
+**Answer**: In the Global Area (`.data` or `.bss` section) of the RAM.
 ```c
 void vTask_function(void *p) {
-    static int i = 10; // Nằm ở RAM toàn cục, tồn tại suốt vòng đời chương trình
+    static int i = 10; // Lives in Global RAM, NOT on the task stack!
     while(1) { ... }
 }
 ```
 
-**Câu 8: Giả sử có một biến cục bộ (non-static) được khai báo bên trong hàm task, bộ nhớ cho biến đó nằm ở đâu?**
-**Đáp án**: Nằm trực tiếp trên vùng bộ nhớ Stack riêng của chính Task đó.
+**Q8: Where is memory allocated for a non-static local variable declared inside a task function?**
+**Answer**: In the specific Task's Stack space.
 ```c
 void vTask_function(void *p) {
-    int i = 0; // Biến này nằm trên Task Stack đã cấp phát lúc xTaskCreate
+    int i = 0; // Lives inside the Task's dynamically allocated stack
     while(1) { ... }
 }
 ```
