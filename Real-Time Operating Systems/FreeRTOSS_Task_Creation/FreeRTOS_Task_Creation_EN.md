@@ -90,8 +90,19 @@ When multiple tasks are ready to run, the CPU can only execute one at a time. Th
 ```
 *Note: Using too many priority levels wastes RAM, as FreeRTOS maintains a separate "Ready List" for each priority level. It can also degrade performance due to excessive context switching if not designed carefully.*
 
-## 4. Under the Hood: Task Creation and RAM
-What happens inside the microcontroller's RAM (e.g., 128KB SRAM) when you create a task dynamically via `xTaskCreate()`?
+## 4. Under the Hood: Task Control Block (TCB) and Memory Layout
+To truly master FreeRTOS, you must understand how it manages memory and what happens under the hood when a task is created. 
+
+### A. The Memory Layout
+When you run a FreeRTOS application on a microcontroller (e.g., with 128KB SRAM), the RAM is divided into specific regions:
+
+1. **Global Data (`.data` and `.bss`)**: This is where all global and `static` variables live. Their size is fixed at compile time.
+2. **Main Stack (MSP)**: Used by the main C program (`main()`), hardware interrupts (ISRs), and the FreeRTOS kernel itself.
+3. **The FreeRTOS Heap**: A large block of memory (size defined by `configTOTAL_HEAP_SIZE`) reserved specifically for FreeRTOS to allocate memory dynamically.
+
+When you call `xTaskCreate()`, FreeRTOS uses `pvPortMalloc()` to grab two chunks of memory from the **Heap**:
+- **The Task Stack**: A dedicated stack just for this task.
+- **The TCB (Task Control Block)**: A structure that holds the task's metadata.
 
 ```mermaid
 graph TD
@@ -111,12 +122,34 @@ graph TD
     TCB -- "pxTopOfStack" --> TaskStack
 ```
 
-FreeRTOS pulls memory from a dedicated pool called the **Heap** (`configTOTAL_HEAP_SIZE`).
-When `xTaskCreate()` is called, two critical structures are allocated in the Heap:
-1. **The TCB (Task Control Block)**: A C structure (defined in `tasks.c`) that holds the task's state, priority, name, and stack pointers.
-2. **The Task Stack**: A block of memory used to store local variables, function calls, and CPU registers when the task is swapped out.
+### B. What is stored on the Task Stack?
+Each task gets its own stack memory. When the task is running, this stack is tracked by the processor's Process Stack Pointer (PSP). The task stack stores:
+- **Local Variables**: Any non-static variables declared inside the task function.
+- **Function Call Context**: Return addresses and arguments when the task calls other functions.
+- **CPU Registers (Context Saving)**: When the Scheduler interrupts the task to run another one (Context Switch), it takes all the CPU core registers (R0-R15, PSR, etc.) and pushes them onto this Task Stack. When the task resumes, the registers are popped back off.
 
-**How they connect**: The first member of the TCB structure is `pxTopOfStack`, which points to the top of this newly allocated Task Stack. The ARM Cortex-M Processor uses the PSP (Process Stack Pointer) to keep track of this.
+### C. Deep Dive into the TCB (`tskTaskControlBlock`)
+The TCB is the "ID Card" of a task. The FreeRTOS kernel uses the TCB to track everything about a task. If you look inside `tasks.c`, the `TCB_t` structure looks roughly like this (simplified):
+
+```c
+typedef struct tskTaskControlBlock
+{
+    volatile StackType_t *pxTopOfStack; /* MUST BE THE FIRST ELEMENT! Points to the last item pushed to the task's stack. */
+
+    ListItem_t xStateListItem;          /* The list item used to place the TCB in Ready/Blocked/Suspended lists. */
+    ListItem_t xEventListItem;          /* The list item used to place the TCB in Event lists (e.g., waiting for a Queue). */
+    UBaseType_t uxPriority;             /* The priority of the task. */
+    StackType_t *pxStack;               /* Points to the start of the stack (used to check for Stack Overflows). */
+    char pcTaskName[ configMAX_TASK_NAME_LEN ]; /* Descriptive name given during creation. */
+    
+    // ... other members depending on FreeRTOSConfig.h (e.g., Mutex tracking, Thread Local Storage)
+} tskTCB;
+```
+
+**Key TCB Members Explained:**
+1. **`pxTopOfStack`**: This **must** be the very first member of the struct. During a context switch, the assembly code needs to know exactly where the task's stack pointer was saved to restore the CPU registers. By placing it first, it sits at offset `0` of the TCB memory address, allowing the fastest possible assembly execution.
+2. **`xStateListItem`**: FreeRTOS manages tasks using Doubly Linked Lists (e.g., `pxReadyTasksLists`, `pxDelayedTaskList`). This list item is the "node" that allows the TCB to be chained into these lists depending on its state.
+3. **`pxStack`**: While `pxTopOfStack` moves up and down as the task runs, `pxStack` always points to the base of the allocated stack memory. FreeRTOS uses this to detect if the task has written past its stack boundary (Stack Overflow).
 
 ## 5. Scheduling
 The **Scheduler** is the core of FreeRTOS. It is a piece of code that runs in privileged mode, deciding which task in the "Ready List" gets CPU time.
@@ -189,45 +222,78 @@ The scheduler will **never** interrupt a running task to swap it out. The runnin
 Using standard UART for `printf` inside an RTOS can cause massive delays and bugs because standard `printf` is slow and blocks the CPU.
 Instead, ARM Cortex processors feature the **ITM (Instrumentation Trace Macrocell)**. You can route `printf` through the SWO (Serial Wire Output) pin. It is highly optimized, application-driven, and supports tracing operating system events with minimal overhead.
 
-## 7. Deep Dive Q&A
+## 7. Deep Dive Q&A (Multiple Choice)
 
 **Q1: If you dynamically create a FreeRTOS Task with 512 bytes of stack, how many bytes in the heap region will be consumed?**
-**Answer**: `512 bytes + sizeof(TCB)`.
-When using `xTaskCreate`, FreeRTOS allocates the Task Stack *and* the Task Control Block (TCB) dynamically from the Heap.
+- [ ] A) 512 bytes
+- [ ] B) (512*4) + sizeof(TCB)
+- [x] C) 512 + sizeof(TCB)
+
+> **Answer: C**
+> **Explanation:** When using `xTaskCreate`, FreeRTOS allocates the Task Stack *and* the Task Control Block (TCB) dynamically from the Heap. So the total heap consumption is the stack size plus the size of the TCB structure.
 
 **Q2: What is the first member element of the TCB Structure?**
-**Answer**: A pointer holding the top of the Task's Stack (`pxTopOfStack`). This is critical because when a context switch occurs, the assembly code needs to quickly find where the stack pointer was saved.
+- [ ] A) Task State
+- [ ] B) Task priority
+- [ ] C) Task's stack size
+- [x] D) A pointer which holds the top of the Task's Stack
 
-**Q3: Tasks won't run until you start the scheduler in FreeRTOS. True or False?**
-**Answer**: True. Even if you create 10 tasks, they just sit in the Ready list. `vTaskStartScheduler()` configures the system timers (SysTick) and triggers the first context switch.
+> **Answer: D**
+> **Explanation:** `pxTopOfStack` is critical because when a context switch occurs, the assembly code needs to quickly find where the stack pointer was saved.
 
-**Q4: In priority-based preemptive scheduling, how does a lower-priority task get CPU time from a higher-priority task?**
-**Answer**: The higher-priority task must enter the Blocked or Suspended state (e.g., using `vTaskDelay`, waiting for a Semaphore, or `vTaskSuspend`). If the high-priority task never blocks, the lower-priority task will **starve** (never run).
+**Q3: Is it true, tasks won't run until you start the scheduler in FreeRTOS?**
+- [x] A) True
+- [ ] B) False
 
-**Q5 & Q6: Static Task Allocation (`xTaskCreateStatic`)**
-FreeRTOS supports static allocation. If you use it, both the TCB and the Stack are NOT in the Heap. They are allocated in the Global RAM space (`.bss` or `.data` sections) by the programmer.
+> **Answer: A**
+> **Explanation:** Even if you create tasks, they just sit in the Ready list. `vTaskStartScheduler()` configures the system timers and triggers the first context switch.
+
+**Q4: In priority-based preemptive scheduling, what is the way to give the CPU to a lower-priority task from a higher-priority task?**
+- [ ] A) No way!
+- [ ] B) The only way is higher Priority task has to call the task yielding
+- [ ] C) The only way is block of the Higher priority task
+- [x] D) Blocking, suspending, and task yielding of higher priority task can make lower priority run on the CPU.
+
+> **Answer: D**
+> **Explanation:** The higher-priority task must enter the Blocked or Suspended state (e.g., using `vTaskDelay`, waiting for a Semaphore), or explicitly yield. Otherwise, it will starve the lower-priority tasks.
+
+**Q5: Can you create a task by static allocation method in FreeRTOS?**
+- [x] A) Yes
+- [ ] B) No, FreeRTOS supports only dynamic allocation method.
+
+> **Answer: A**
+> **Explanation:** FreeRTOS supports static allocation using `xTaskCreateStatic()`.
+
+**Q6: When you create a task statically, where will the stack memory of the task be allocated?**
+- [ ] A) In stack space of the RAM
+- [ ] B) In heap space of the RAM
+- [x] C) In Global space of the RAM
+
+> **Answer: C**
+> **Explanation:** Both the TCB and the Stack are allocated in the Global RAM space (`.bss` or `.data` sections) by the programmer.
+
+**Q7: Suppose a non-zero initialized static variable is declared in the task function, where exactly is memory for that static variable allocated?**
 ```c
-// Statically allocated stack and TCB
-StackType_t xTaskStack[100];
-StaticTask_t xTaskBuffer;
-
-xTaskCreateStatic(vTaskFunction, "Task", 100, NULL, 1, xTaskStack, &xTaskBuffer);
-```
-
-**Q7: Where is memory allocated for a static variable declared inside a task function?**
-**Answer**: In the Global Area (`.data` or `.bss` section) of the RAM.
-```c
-void vTask_function(void *p) {
-    static int i = 10; // Lives in Global RAM, NOT on the task stack!
-    while(1) { ... }
+void task_function(void *p) {
+    static int i = 10;
 }
 ```
+- [ ] A) In the stack space of that Task
+- [ ] B) In the Heap area of the RAM
+- [ ] C) In the Stack area of the RAM
+- [x] D) In the global Area of the RAM, also called as .DATA section
 
-**Q8: Where is memory allocated for a non-static local variable declared inside a task function?**
-**Answer**: In the specific Task's Stack space.
+> **Answer: D**
+> **Explanation:** In C, any `static` variable is allocated in the global memory space (`.data` section), regardless of whether it is inside a task function or not. It does not use the task's stack.
+
+**Q8: Suppose a non-static local variable is declared in the task function, where exactly is the memory for the non-static variable allocated?**
 ```c
-void vTask_function(void *p) {
-    int i = 0; // Lives inside the Task's dynamically allocated stack
-    while(1) { ... }
+void task_function(void *p) {
+    int i; /* non static variable */
 }
 ```
+- [ ] A) In the main stack space of the RAM
+- [x] B) In the Task's stack space
+
+> **Answer: B**
+> **Explanation:** Local variables (non-static) are always pushed onto the active stack. When the task is running, the active stack is the Task's dynamically allocated stack space.
