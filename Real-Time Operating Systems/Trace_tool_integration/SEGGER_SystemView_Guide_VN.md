@@ -12,6 +12,15 @@ SystemView đóng vai trò như một máy "chụp X-quang" cho code nhúng. Nó
 - **Tối ưu năng lượng**: Phân tích thời gian rảnh (Idle time) của CPU để quyết định khi nào đưa CPU vào chế độ ngủ (Sleep mode).
 - **Tìm lỗi (Debugging)**: Phát hiện các đoạn code kém hiệu quả, các ngắt bị gọi thừa thãi (spurious interrupts), hoặc các sự kiện chuyển đổi task (Context Switch) không mong muốn.
 
+### Các thuật ngữ và từ viết tắt (Glossary)
+Trước khi đi sâu hơn, hãy làm rõ một số thuật ngữ thường gặp trong tài liệu này:
+- **MCU (Microcontroller Unit)**: Vi điều khiển hay con chip mà bạn đang lập trình (Ví dụ: STM32).
+- **RTOS (Real-Time Operating System)**: Hệ điều hành thời gian thực quản lý các task của bạn (Ví dụ: FreeRTOS).
+- **RTT (Real Time Transfer)**: Công nghệ truyền tải thời gian thực độc quyền của SEGGER. Khác với cổng UART rất chậm và hay làm nghẽn CPU, RTT cho phép đọc/ghi dữ liệu **trực tiếp vào RAM** của vi điều khiển thông qua mạch nạp với tốc độ cực cao, gần như không tốn chút tài nguyên CPU nào.
+- **SWD (Serial Wire Debug)**: Chuẩn giao tiếp phần cứng 2 dây do ARM phát triển để nạp code và debug. Đây chính là đường dây vật lý mà mạch nạp J-Link dùng để hút dữ liệu RTT từ RAM ra ngoài.
+- **ISR (Interrupt Service Routine)**: Trình phục vụ ngắt. Là các hàm phần cứng (ví dụ: ngắt timer, ngắt nút nhấn) buộc CPU phải tạm dừng việc đang làm để xử lý ngay lập tức.
+- **DWT_CYCCNT (Data Watchpoint and Trace Cycle Count)**: Một thanh ghi phần cứng đặc biệt bên trong nhân ARM Cortex. Nó đếm tăng lên 1 đơn vị ứng với mỗi một chu kỳ dao động (clock tick) của CPU. Nó đóng vai trò như một chiếc đồng hồ bấm giờ siêu chính xác.
+
 ## 2. Các thành phần của SystemView Toolkit
 Bộ công cụ bao gồm 2 thành phần chính hoạt động song song:
 1. **Phần mềm hiển thị trên PC (Host)**: Cài đặt trên máy tính Windows, Linux, hoặc Mac.
@@ -22,12 +31,12 @@ Dưới đây là sơ đồ mô tả cách dữ liệu chảy từ ứng dụng 
 
 ```mermaid
 graph LR
-    subgraph Target MCU [Vi điều khiển (Device)]
-        App[Application Code]
-        OS[FreeRTOS Kernel]
-        Patch[SEGGER Patch/Hooks]
-        SysView[SystemView Target Module]
-        RTT[Bộ đệm SEGGER RTT (RAM)]
+    subgraph Target_MCU ["Vi điều khiển (Device)"]
+        App["Application Code"]
+        OS["FreeRTOS Kernel"]
+        Patch["SEGGER Patch/Hooks"]
+        SysView["SystemView Target Module"]
+        RTT["Bộ đệm SEGGER RTT (RAM)"]
         
         App --> OS
         OS -- Trace Macros --> Patch
@@ -35,12 +44,12 @@ graph LR
         SysView --> RTT
     end
 
-    subgraph Hardware Probe
-        JLink[Mạch nạp J-Link/ST-Link]
+    subgraph Hardware_Probe ["Hardware Probe"]
+        JLink["Mạch nạp J-Link/ST-Link"]
     end
 
-    subgraph PC Host [Máy tính]
-        Viewer[Phần mềm SystemView]
+    subgraph PC_Host ["Máy tính"]
+        Viewer["Phần mềm SystemView"]
     end
 
     RTT == "Đọc/Ghi RAM qua SWD" ==> JLink
